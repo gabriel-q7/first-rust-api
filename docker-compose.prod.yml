@@ -1,0 +1,118 @@
+# Docker Compose for production environment
+version: '3.8'
+
+services:
+  # PostgreSQL database with production settings
+  postgres:
+    image: postgres:15-alpine
+    container_name: first-rust-api-db-prod
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-first_rust_api}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - app-network
+    restart: always
+    command: >
+      postgres
+        -c log_statement=all
+        -c log_duration=on
+        -c log_line_prefix='%t [%p]: [%l-1] user=%u,db=%d,app=%a,client=%h '
+        -c shared_preload_libraries=pg_stat_statements
+        -c pg_stat_statements.max=10000
+        -c pg_stat_statements.track=all
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-first_rust_api}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Rust API application with production optimizations
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    container_name: first-rust-api-app-prod
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-first_rust_api}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-3600}
+      SERVER_ADDR: 0.0.0.0:3000
+      RUST_LOG: ${RUST_LOG:-info}
+    expose:
+      - "3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+    volumes:
+      - api_prod_logs:/app/logs
+      - /etc/localtime:/etc/localtime:ro
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: first-rust-api-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - api
+    networks:
+      - app-network
+    restart: always
+
+  # Redis for session storage and caching
+  redis:
+    image: redis:7-alpine
+    container_name: first-rust-api-redis-prod
+    volumes:
+      - redis_prod_data:/data
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - app-network
+    command: >
+      redis-server
+        --appendonly yes
+        --appendfsync everysec
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_prod_data:
+  redis_prod_data:
+  api_prod_logs:
+  nginx_logs:
+
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

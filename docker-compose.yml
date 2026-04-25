@@ -1,0 +1,75 @@
+# Docker Compose for development environment
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    container_name: first-rust-api-db
+    environment:
+      POSTGRES_DB: first_rust_api
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d first_rust_api"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Rust API application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: first-rust-api-app
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/first_rust_api
+      JWT_SECRET: development-secret-key-change-in-production
+      JWT_EXPIRES_IN: 86400
+      SERVER_ADDR: 0.0.0.0:3000
+      RUST_LOG: debug
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+    volumes:
+      # For development, mount source code for hot reload (optional)
+      # - ./src:/app/src:ro
+      - api_logs:/app/logs
+    restart: unless-stopped
+
+  # Redis for session storage (optional, for future use)
+  redis:
+    image: redis:7-alpine
+    container_name: first-rust-api-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+  api_logs:
+
+networks:
+  app-network:
+    driver: bridge
