@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{error::AppError, middleware::auth::AuthUser, state::AppState};
 
-use super::{dto::UserResponse, service};
+use super::{dto::{UpdateUserRequest, UserResponse}, service};
 
 /// Handler para GET /users/me
 ///
@@ -32,5 +32,18 @@ pub async fn get_user(
     Path(id): Path<Uuid>,
 ) -> Result<Json<UserResponse>, AppError> {
     let user = service::get_user_by_id(&state, id).await?;
+    Ok(Json(user))
+}
+
+/// Handler para PUT /users/me
+///
+/// Rota protegida — requer token JWT válido.
+/// Permite atualizar dados do usuário autenticado.
+pub async fn update_user(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(request): Json<UpdateUserRequest>,
+) -> Result<Json<UserResponse>, AppError> {
+    let user = service::update_user(&state, auth.user_id, request).await?;
     Ok(Json(user))
 }

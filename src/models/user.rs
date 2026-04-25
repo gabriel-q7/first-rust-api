@@ -16,6 +16,8 @@ pub struct User {
     pub id: Uuid,
     /// E-mail único do usuário.
     pub email: String,
+    /// Nome opcional do usuário.
+    pub name: Option<String>,
     /// Hash Argon2 da senha (nunca expor em respostas!).
     #[serde(skip_serializing)]
     pub password_hash: String,

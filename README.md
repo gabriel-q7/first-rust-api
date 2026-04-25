@@ -131,10 +131,65 @@ GET /users/me
 GET /users/:id
 ```
 
+**Atualizar perfil do usuário autenticado:**
+```
+PUT /users/me
+Content-Type: application/json
+
+{
+  "name": "João Silva",
+  "email": "joao@email.com",
+  "password": "novasenha123",
+  "current_password": "senhaatual123"
+}
+```
+
+Todos os campos são opcionais. Para alterar a senha, `current_password` é obrigatório.
+
 ## 🧪 Testes
 
+**Testes unitários:**
 ```bash
 cargo test
+```
+
+**Testes de integração:**
+```bash
+# Configurar banco de teste
+export TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test_first_rust_api
+
+# Rodar testes
+cargo test --test auth_tests
+cargo test --test users_tests
+```
+
+## 🐳 Docker
+
+### Desenvolvimento
+
+```bash
+# Iniciar todos os serviços (PostgreSQL + API + Redis)
+docker-compose up -d
+
+# Ver logs da aplicação
+docker-compose logs -f api
+
+# Parar serviços
+docker-compose down
+```
+
+### Produção
+
+```bash
+# Configurar variáveis de ambiente
+cp .env.prod.example .env.prod
+# Editar .env.prod com valores de produção
+
+# Iniciar stack completa (DB + API + Nginx + Redis)
+docker-compose -f docker-compose.prod.yml --env-file .env.prod up -d
+
+# Monitorar logs
+docker-compose -f docker-compose.prod.yml logs -f
 ```
 
 ## 🔒 Segurança
@@ -153,4 +208,4 @@ cargo test
 - [x] **Fase 5** — Rotas protegidas com extractor JWT
 - [x] **Fase 6** — GET /users/me e GET /users/:id
 - [x] **Fase 7** — Centralização de erros + organização em módulos
-- [ ] **Fase 8** — PUT /users/me, refresh token, testes de integração, Docker
+- [x] **Fase 8** — PUT /users/me, testes de integração, Docker
