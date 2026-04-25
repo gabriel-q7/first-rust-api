@@ -35,7 +35,7 @@ pub enum AppError {
     Validation(String),
 
     /// E-mail já cadastrado.
-    #[error("E-mail já cadastrado")]
+    #[error("E-mail já está em uso")]
     #[allow(dead_code)]
     EmailAlreadyExists,
 
@@ -60,7 +60,7 @@ impl IntoResponse for AppError {
                     if db_err.is_unique_violation() {
                         return (
                             StatusCode::CONFLICT,
-                            Json(json!({ "error": "E-mail já cadastrado" })),
+                            Json(json!({ "error": "E-mail já está em uso" })),
                         )
                             .into_response();
                     }

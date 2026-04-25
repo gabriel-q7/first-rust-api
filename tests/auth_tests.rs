@@ -15,7 +15,7 @@ async fn test_register_success() {
     cleanup_database(&pool).await;
 
     let request = post_json("/auth/register", &json!({
-        "email": "test@example.com",
+        "email": "register_success@example.com",
         "password": "12345678"
     }));
 
@@ -24,7 +24,7 @@ async fn test_register_success() {
     assert_eq!(status, 201);
     assert!(response["access_token"].is_string());
     assert_eq!(response["token_type"], "Bearer");
-    assert!(user_exists(&pool, "test@example.com").await);
+    assert!(user_exists(&pool, "register_success@example.com").await);
 }
 
 #[tokio::test]
@@ -49,7 +49,7 @@ async fn test_register_short_password() {
     cleanup_database(&pool).await;
 
     let request = post_json("/auth/register", &json!({
-        "email": "test@example.com",
+        "email": "short_password@example.com",
         "password": "123"
     }));
 
@@ -66,7 +66,7 @@ async fn test_register_duplicate_email() {
 
     // First registration
     let request1 = post_json("/auth/register", &json!({
-        "email": "test@example.com",
+        "email": "duplicate@example.com",
         "password": "12345678"
     }));
     let (status1, _) = execute_request(&app, request1).await;
@@ -74,7 +74,7 @@ async fn test_register_duplicate_email() {
 
     // Duplicate registration
     let request2 = post_json("/auth/register", &json!({
-        "email": "test@example.com",
+        "email": "duplicate@example.com",
         "password": "87654321"
     }));
     let (status2, response2) = execute_request(&app, request2).await;
@@ -90,14 +90,14 @@ async fn test_login_success() {
 
     // Register user first
     let register_request = post_json("/auth/register", &json!({
-        "email": "test@example.com",
+        "email": "login_success@example.com",
         "password": "12345678"
     }));
     execute_request(&app, register_request).await;
 
     // Login
     let login_request = post_json("/auth/login", &json!({
-        "email": "test@example.com",
+        "email": "login_success@example.com",
         "password": "12345678"
     }));
 
@@ -115,14 +115,14 @@ async fn test_login_invalid_credentials() {
 
     // Register user first
     let register_request = post_json("/auth/register", &json!({
-        "email": "test@example.com",
+        "email": "invalid_creds@example.com",
         "password": "12345678"
     }));
     execute_request(&app, register_request).await;
 
     // Login with wrong password
     let login_request = post_json("/auth/login", &json!({
-        "email": "test@example.com",
+        "email": "invalid_creds@example.com",
         "password": "wrongpassword"
     }));
 

@@ -1,48 +1,89 @@
-//! modules/auth/service.rs — Regras de negócio do módulo de autenticação.
-//!
-//! O service recebe dados já validados do handler, executa a lógica
-//! (hash de senha, verificação, geração de JWT) e chama o repositório.
+//! Serviços de autenticação.
 
+use crate::{db::user_repository, modules::auth::dto::{LoginRequest, LoginResponse, RegisterRequest, RegisterResponse}};
+use crate::error::AppError;
+use crate::state::AppState;
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{rand_core::OsRng, PasswordHasher, PasswordHash, PasswordVerifier, SaltString},
     Argon2,
 };
 use uuid::Uuid;
+use jsonwebtoken::{encode, Header, EncodingKey};
+use serde::{Serialize};
+use chrono::{Utc, Duration};
 
-use crate::{
-    db::user_repository,
-    error::AppError,
-    middleware::auth::create_token,
-    state::AppState,
-};
+#[derive(Serialize)]
+struct Claims {
+    sub: String, // subject (user id)
+    exp: i64,    // expiration
+}
 
-use super::dto::{LoginResponse, RegisterRequest, RegisterResponse};
+/// Valida se um e-mail tem formato válido.
+fn is_valid_email(email: &str) -> bool {
+    // Validação simples: contém @ e pelo menos um . após o @
+    let parts: Vec<&str> = email.split('@').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    let domain = parts[1];
+    domain.contains('.') && domain.len() > 3
+}
 
 /// Registra um novo usuário.
 ///
 /// # Fluxo:
-/// 1. Valida e-mail e senha
-/// 2. Gera hash Argon2 da senha
-/// 3. Salva no banco
-/// 4. Retorna os dados básicos (sem hash)
-pub async fn register(state: &AppState, req: RegisterRequest) -> Result<RegisterResponse, AppError> {
-    // --- Validação dos dados de entrada ---
-    validate_email(&req.email)?;
-    validate_password(&req.password)?;
+/// 1. Valida se o e-mail já está em uso
+/// 2. Aplica hash na senha
+/// 3. Cria o usuário no banco
+/// 4. Gera e retorna JWT token
+///
+/// # Erros:
+/// - `BadRequest`: E-mail já está em uso
+/// - `Internal`: Erro no banco de dados
+pub async fn register(
+    state: &AppState,
+    req: RegisterRequest,
+) -> Result<RegisterResponse, AppError> {
+    // --- Validações ---
+    // Valida formato do e-mail
+    if !is_valid_email(&req.email) {
+        return Err(AppError::Validation("E-mail inválido".to_string()));
+    }
+    
+    // Valida tamanho mínimo da senha
+    if req.password.len() < 8 {
+        return Err(AppError::Validation("A senha deve ter pelo menos 8 caracteres".to_string()));
+    }
+    
+    // Verifica se e-mail já está em uso
+    if user_repository::find_user_by_email(&state.db, &req.email).await?.is_some() {
+        return Err(AppError::EmailAlreadyExists);
+    }
 
-    // --- Hash da senha com Argon2 ---
-    // Argon2 é considerado o algoritmo mais seguro para hashing de senhas em 2024.
-    // Geramos um salt aleatório diferente para cada usuário.
-    let password_hash = hash_password(&req.password)?;
+    // --- Hash da senha ---
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(req.password.as_bytes(), &salt)
+        .map_err(|_| AppError::Internal("Failed to hash password".to_string()))?
+        .to_string();
 
     // --- Persistência no banco ---
     let id = Uuid::new_v4();
     let user = user_repository::create_user(&state.db, id, &req.email, &password_hash).await?;
 
+    // --- Geração do JWT ---
+    let claims = Claims {
+        sub: user.id.to_string(),
+        exp: (Utc::now() + Duration::hours(24)).timestamp(),
+    };
+
+    let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(b"secret"))
+        .map_err(|_| AppError::Internal("Failed to generate token".to_string()))?;
+
     Ok(RegisterResponse {
-        id: user.id,
-        email: user.email,
-        created_at: user.created_at,
+        access_token: token,
+        token_type: "Bearer".to_string(),
     })
 }
 
@@ -50,20 +91,40 @@ pub async fn register(state: &AppState, req: RegisterRequest) -> Result<Register
 ///
 /// # Fluxo:
 /// 1. Busca o usuário pelo e-mail
-/// 2. Verifica a senha contra o hash
-/// 3. Gera um JWT
-/// 4. Retorna o token
-pub async fn login(state: &AppState, email: &str, password: &str) -> Result<LoginResponse, AppError> {
-    // --- Busca o usuário no banco ---
-    let user = user_repository::find_user_by_email(&state.db, email)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
+/// 2. Verifica a senha
+/// 3. Gera e retorna JWT token
+///
+/// # Erros:
+/// - `BadRequest`: E-mail não encontrado ou senha incorreta
+/// - `Internal`: Erro no banco de dados
+pub async fn login(
+    state: &AppState,
+    req: LoginRequest,
+) -> Result<LoginResponse, AppError> {
+    // --- Busca do usuário ---
+    let user = user_repository::find_user_by_email(&state.db, &req.email).await?
+        .ok_or_else(|| AppError::Unauthorized)?;
 
-    // --- Verifica a senha ---
-    verify_password(password, &user.password_hash)?;
+    // --- Verificação da senha ---
+    let password_hash = PasswordHash::new(&user.password_hash)
+        .map_err(|_| AppError::Internal("Invalid password hash".to_string()))?;
+    
+    let password_valid = Argon2::default()
+        .verify_password(req.password.as_bytes(), &password_hash)
+        .is_ok();
+    
+    if !password_valid {
+        return Err(AppError::Unauthorized);
+    }
 
-    // --- Gera o token JWT ---
-    let token = create_token(user.id, &state.config.jwt_secret, state.config.jwt_expires_in)?;
+    // --- Geração do JWT ---
+    let claims = Claims {
+        sub: user.id.to_string(),
+        exp: (Utc::now() + Duration::hours(24)).timestamp(),
+    };
+
+    let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(b"secret"))
+        .map_err(|_| AppError::Internal("Failed to generate token".to_string()))?;
 
     Ok(LoginResponse {
         access_token: token,
@@ -71,87 +132,3 @@ pub async fn login(state: &AppState, email: &str, password: &str) -> Result<Logi
     })
 }
 
-// ─── Funções auxiliares privadas ─────────────────────────────────────────────
-
-/// Valida o formato básico do e-mail.
-fn validate_email(email: &str) -> Result<(), AppError> {
-    let email = email.trim();
-    if email.is_empty() {
-        return Err(AppError::Validation("E-mail é obrigatório".to_string()));
-    }
-    // Validação simples: deve conter @ e pelo menos um ponto após o @.
-    if !email.contains('@') || email.split('@').nth(1).map_or(true, |d| !d.contains('.')) {
-        return Err(AppError::Validation("Formato de e-mail inválido".to_string()));
-    }
-    Ok(())
-}
-
-/// Valida o tamanho mínimo da senha.
-fn validate_password(password: &str) -> Result<(), AppError> {
-    if password.len() < 8 {
-        return Err(AppError::Validation(
-            "A senha deve ter no mínimo 8 caracteres".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// Gera o hash Argon2 de uma senha em texto puro.
-pub fn hash_password(password: &str) -> Result<String, AppError> {
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    argon2
-        .hash_password(password.as_bytes(), &salt)
-        .map(|h| h.to_string())
-        .map_err(|e| AppError::Internal(format!("Erro ao gerar hash: {e}")))
-}
-
-/// Verifica se a senha corresponde ao hash armazenado.
-pub fn verify_password(password: &str, hash: &str) -> Result<(), AppError> {
-    let parsed_hash =
-        PasswordHash::new(hash).map_err(|e| AppError::Internal(format!("Hash inválido: {e}")))?;
-
-    Argon2::default()
-        .verify_password(password.as_bytes(), &parsed_hash)
-        .map_err(|_| AppError::Unauthorized)
-}
-
-// ─── Testes unitários ─────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_validate_email_valid() {
-        assert!(validate_email("user@example.com").is_ok());
-        assert!(validate_email("gabriel@email.com").is_ok());
-    }
-
-    #[test]
-    fn test_validate_email_invalid() {
-        assert!(validate_email("").is_err());
-        assert!(validate_email("notanemail").is_err());
-        assert!(validate_email("missing@dot").is_err());
-    }
-
-    #[test]
-    fn test_validate_password_valid() {
-        assert!(validate_password("12345678").is_ok());
-        assert!(validate_password("strongpassword").is_ok());
-    }
-
-    #[test]
-    fn test_validate_password_too_short() {
-        assert!(validate_password("1234567").is_err());
-        assert!(validate_password("").is_err());
-    }
-
-    #[test]
-    fn test_hash_and_verify_password() {
-        let password = "mypassword123";
-        let hash = hash_password(password).expect("hash deve funcionar");
-        assert!(verify_password(password, &hash).is_ok());
-        assert!(verify_password("wrongpassword", &hash).is_err());
-    }
-}

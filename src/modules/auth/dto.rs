@@ -33,10 +33,11 @@ pub struct LoginResponse {
 }
 
 /// Resposta retornada após registro bem-sucedido.
-/// Nunca inclui o hash da senha.
+/// Inclui o token JWT para autenticação imediata.
 #[derive(Debug, Serialize)]
 pub struct RegisterResponse {
-    pub id: Uuid,
-    pub email: String,
-    pub created_at: NaiveDateTime,
+    /// Token JWT gerado.
+    pub access_token: String,
+    /// Tipo do token (sempre "Bearer").
+    pub token_type: String,
 }

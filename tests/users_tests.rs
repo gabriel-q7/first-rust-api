@@ -10,10 +10,10 @@ use common::{
 use serde_json::json;
 use uuid::Uuid;
 
-async fn create_authenticated_user(app: &axum::Router) -> (Uuid, String) {
+async fn create_authenticated_user(app: &axum::Router, email: &str) -> (Uuid, String) {
     // Register and login to get token
     let register_request = post_json("/auth/register", &json!({
-        "email": "test@example.com",
+        "email": email,
         "password": "12345678"
     }));
     let (_, register_response) = execute_request(app, register_request).await;

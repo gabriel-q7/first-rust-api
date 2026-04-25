@@ -31,6 +31,6 @@ pub async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    let response = service::login(&state, &body.email, &body.password).await?;
+    let response = service::login(&state, body).await?;
     Ok(Json(response))
 }
